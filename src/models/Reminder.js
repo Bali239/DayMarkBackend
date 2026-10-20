@@ -8,6 +8,7 @@ const reminderSchema = new mongoose.Schema({
   category: { type: String, enum: ["Personal", "Work", "Health", "Other"], default: "Personal" },
   completedAt: { type: Date, default: null },
   emailSentAt: { type: Date, default: null },
+  emailSuppressed: { type: Boolean, default: false },
 }, { timestamps: true });
 
 reminderSchema.index({ user: 1, dueAt: 1 });

@@ -1,4 +1,8 @@
 export function serializeReminder(item) {
+  const emailSuppressed = Boolean(
+    item.emailSuppressed || item.title?.startsWith("[Seed]"),
+  );
+
   return {
     id: item.id,
     title: item.title,
@@ -7,6 +11,7 @@ export function serializeReminder(item) {
     category: item.category,
     completed: Boolean(item.completedAt),
     completedAt: item.completedAt,
-    emailSentAt: item.emailSentAt,
+    emailSentAt: emailSuppressed ? null : item.emailSentAt,
+    emailSuppressed,
   };
 }

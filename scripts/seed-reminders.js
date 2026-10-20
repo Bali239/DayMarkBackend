@@ -205,8 +205,7 @@ try {
       category: fixture.category,
       dueAt,
       completedAt: fixture.completed ? seededAt : null,
-      // Prevent test fixtures from being picked up by the email scheduler.
-      emailSentAt: seededAt,
+      emailSuppressed: true,
     };
   });
 
@@ -215,7 +214,7 @@ try {
     `Added ${reminders.length} test reminders for ${email}${reset ? " (previous [Seed] reminders replaced)" : ""}.`,
   );
   console.log(
-    "Seed reminders are prefixed with [Seed] and marked as email-handled to avoid sending test emails.",
+    "Seed reminders are prefixed with [Seed] and email-suppressed; they will not be sent.",
   );
 } catch (error) {
   console.error(`Reminder seeding failed: ${error.message}`);
