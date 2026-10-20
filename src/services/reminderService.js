@@ -86,6 +86,7 @@ export async function updateReminder(userId, reminderId, data) {
   if (changes.dueAt) {
     changes.dueAt = new Date(changes.dueAt);
     changes.emailSentAt = null;
+    changes.pushSentAt = null;
   }
 
   const item = await Reminder.findOne({ _id: reminderId, user: userId });
@@ -101,7 +102,13 @@ export async function updateReminder(userId, reminderId, data) {
 export async function toggleReminderCompletion(userId, reminderId) {
   const item = await Reminder.findOne({ _id: reminderId, user: userId });
   if (!item) return null;
-  item.completedAt = item.completedAt ? null : new Date();
+  if (item.completedAt) {
+    item.completedAt = null;
+    item.emailSentAt = null;
+    item.pushSentAt = null;
+  } else {
+    item.completedAt = new Date();
+  }
   await item.save();
   return serializeReminder(item);
 }

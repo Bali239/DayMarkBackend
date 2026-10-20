@@ -62,3 +62,15 @@ export async function createGoogleSession(credential) {
 export async function revokeSession(sessionId) {
   await Session.deleteOne({ _id: sessionId });
 }
+
+export async function savePushToken(userId, token) {
+  await User.updateMany(
+    { _id: { $ne: userId }, pushTokens: token },
+    { $pull: { pushTokens: token } },
+  );
+  await User.updateOne({ _id: userId }, { $addToSet: { pushTokens: token } });
+}
+
+export async function removePushToken(userId, token) {
+  await User.updateOne({ _id: userId }, { $pull: { pushTokens: token } });
+}

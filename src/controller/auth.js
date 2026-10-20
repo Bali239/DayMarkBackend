@@ -1,7 +1,12 @@
 import { GOOGLE_CLIENT_ID } from "../config/env.js";
-import { createGoogleSession, revokeSession } from "../services/authService.js";
+import {
+  createGoogleSession,
+  removePushToken,
+  revokeSession,
+  savePushToken,
+} from "../services/authService.js";
 import { serializePublicUser } from "../serializers/user.js";
-import { googleCredentialSchema } from "../validators/auth.js";
+import { googleCredentialSchema, pushTokenSchema } from "../validators/auth.js";
 import { ErrorResponse, SuccessResponse } from "../util/Responses.js";
 
 export function getAuthConfig(_req, res) {
@@ -32,6 +37,30 @@ export async function signOut(req, res, next) {
   try {
     await revokeSession(req.session._id);
     return SuccessResponse(res, null, "Signed out");
+  } catch (error) {
+    return next(error);
+  }
+}
+
+export async function registerPushToken(req, res, next) {
+  try {
+    const parsed = pushTokenSchema.safeParse(req.body);
+    if (!parsed.success)
+      return ErrorResponse(res, "A valid push token is required", 400);
+    await savePushToken(req.user._id, parsed.data.token);
+    return SuccessResponse(res, null, "Push notifications enabled");
+  } catch (error) {
+    return next(error);
+  }
+}
+
+export async function unregisterPushToken(req, res, next) {
+  try {
+    const parsed = pushTokenSchema.safeParse(req.body);
+    if (!parsed.success)
+      return ErrorResponse(res, "A valid push token is required", 400);
+    await removePushToken(req.user._id, parsed.data.token);
+    return SuccessResponse(res, null, "Push notifications disabled");
   } catch (error) {
     return next(error);
   }
