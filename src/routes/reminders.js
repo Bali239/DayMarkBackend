@@ -13,23 +13,56 @@ const reminderSchema = z.object({
   dueAt: z.string().datetime({ offset: true }),
   category: z.enum(["Personal", "Work", "Health", "Other"]).default("Personal"),
 });
+const listQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(8),
+  filter: z.enum(["Overview", "Upcoming", "All reminders", "Completed", "Overdue"]).default("Overview"),
+  search: z.string().trim().max(100).default(""),
+});
 const toClient = (item) => ({ id: item.id, title: item.title, description: item.description, dueAt: item.dueAt, category: item.category, completed: Boolean(item.completedAt), completedAt: item.completedAt, emailSentAt: item.emailSentAt });
 
 router.get("/", async (req, res, next) => {
   try {
-    const [items, user] = await Promise.all([
-      Reminder.find({ user: req.user._id }).sort({ dueAt: 1 }),
+    const parsedQuery = listQuerySchema.safeParse(req.query);
+    if (!parsedQuery.success) return ErrorResponse(res, "Invalid reminder pagination or filter", 400);
+    const { page, pageSize, filter, search } = parsedQuery.data;
+    const now = new Date();
+    const baseFilter = { user: req.user._id };
+    const filterConditions = {
+      Overview: { completedAt: null, dueAt: { $gte: now } },
+      Upcoming: { completedAt: null, dueAt: { $gte: now } },
+      "All reminders": {},
+      Completed: { completedAt: { $ne: null } },
+      Overdue: { completedAt: null, dueAt: { $lt: now } },
+    };
+    const reminderFilter = { ...baseFilter, ...filterConditions[filter] };
+    if (search) {
+      const escapedSearch = search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      reminderFilter.$or = ["title", "description", "category"].map((field) => ({ [field]: { $regex: escapedSearch, $options: "i" } }));
+    }
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const tomorrowStart = new Date(todayStart);
+    tomorrowStart.setDate(tomorrowStart.getDate() + 1);
+    const [total, upcoming, completed, overdue, today, user] = await Promise.all([
+      Reminder.countDocuments(reminderFilter),
+      Reminder.countDocuments({ ...baseFilter, completedAt: null, dueAt: { $gte: now } }),
+      Reminder.countDocuments({ ...baseFilter, completedAt: { $ne: null } }),
+      Reminder.countDocuments({ ...baseFilter, completedAt: null, dueAt: { $lt: now } }),
+      Reminder.countDocuments({ ...baseFilter, completedAt: null, dueAt: { $gte: todayStart, $lt: tomorrowStart } }),
       User.findById(req.user._id).select("reminderAdvanceMinutes"),
     ]);
-    const reminders = items.map(toClient);
-    const now = new Date();
-    const stats = {
-      upcoming: items.filter((item) => !item.completedAt && item.dueAt >= now).length,
-      completed: items.filter((item) => item.completedAt).length,
-      overdue: items.filter((item) => !item.completedAt && item.dueAt < now).length,
-      today: items.filter((item) => !item.completedAt && item.dueAt.toDateString() === now.toDateString()).length,
-    };
-    return SuccessResponse(res, { reminders, stats, reminderAdvanceMinutes: user.reminderAdvanceMinutes });
+    const totalPages = Math.ceil(total / pageSize);
+    const currentPage = Math.min(page, Math.max(1, totalPages));
+    const items = await Reminder.find(reminderFilter)
+      .sort({ dueAt: 1, _id: 1 })
+      .skip((currentPage - 1) * pageSize)
+      .limit(pageSize);
+    return SuccessResponse(res, {
+      reminders: items.map(toClient),
+      stats: { upcoming, completed, overdue, today },
+      pagination: { page: currentPage, pageSize, total, totalPages },
+      reminderAdvanceMinutes: user.reminderAdvanceMinutes,
+    });
   } catch (error) { next(error); }
 });
 
@@ -38,7 +71,7 @@ router.post("/", async (req, res, next) => {
     const parsed = reminderSchema.safeParse(req.body);
     if (!parsed.success) return ErrorResponse(res, "Please provide a title, valid date, and time", 400);
     const dueAt = new Date(parsed.data.dueAt);
-    const item = await Reminder.create({ user: req.user._id, ...parsed.data, dueAt });
+    const item = await Reminder.create({ user: req.user._id, ...parsed.data, dueAt, completedAt: null });
     return SuccessResponse(res, toClient(item), "Reminder created", 201);
   } catch (error) { next(error); }
 });
@@ -62,8 +95,14 @@ router.patch("/:id", async (req, res, next) => {
       changes.dueAt = new Date(changes.dueAt);
       changes.emailSentAt = null;
     }
-    const item = await Reminder.findOneAndUpdate({ _id: req.params.id, user: req.user._id }, { $set: changes }, { new: true, runValidators: true });
-    if (!item) return ErrorResponse(res, "Reminder not found", 404);
+    const currentItem = await Reminder.findOne({ _id: req.params.id, user: req.user._id });
+    if (!currentItem) return ErrorResponse(res, "Reminder not found", 404);
+    if (changes.dueAt && changes.dueAt.getTime() !== currentItem.dueAt.getTime()) {
+      // Rescheduling a completed reminder makes it active again.
+      changes.completedAt = null;
+    }
+    Object.assign(currentItem, changes);
+    const item = await currentItem.save();
     return SuccessResponse(res, toClient(item), "Reminder updated");
   } catch (error) { next(error); }
 });
