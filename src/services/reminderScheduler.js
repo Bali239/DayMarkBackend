@@ -3,6 +3,8 @@ import nodemailer from "nodemailer";
 import firebaseMessaging from "./firebaseAdmin.js";
 import {
   MAIL_FROM,
+  PRIVATE_KEY,
+  DATABASE_URL,
   SMTP_HOST,
   SMTP_PASS,
   SMTP_PORT,
@@ -76,13 +78,14 @@ async function processDueReminders() {
       await Promise.all(deliveries);
     }
   } catch (error) {
-    console.error(`Reminder scheduler failed: ${error.message}`);
+    logError("reminder_scheduler_failed", error);
   } finally {
     running = false;
   }
 }
 
 async function sendReminderEmail(reminder, user) {
+  let phase = "provider_send";
   try {
     const delivery = await transporter.sendMail({
       from: MAIL_FROM,
@@ -99,22 +102,32 @@ async function sendReminderEmail(reminder, user) {
     );
 
     if (wasAccepted) {
+      phase = "mark_sent_in_database";
       await Reminder.updateOne(
         { _id: reminder._id, emailSentAt: null },
         { $set: { emailSentAt: new Date() } },
       );
     } else {
-      const rejected = (delivery.rejected || []).join(", ");
-      console.error(
-        `Reminder email was not accepted (${reminder._id})${rejected ? `: ${rejected}` : "."}`,
-      );
+      logError("reminder_delivery_failed", new Error("SMTP did not accept the recipient"), {
+        channel: "email",
+        phase: "provider_rejected",
+        reminderId: String(reminder._id),
+        acceptedCount: acceptedRecipients.length,
+        rejectedCount: delivery.rejected?.length || 0,
+        responseCode: delivery.responseCode || null,
+      });
     }
   } catch (error) {
-    console.error(`Reminder email failed (${reminder._id}): ${error.message}`);
+    logError("reminder_delivery_failed", error, {
+      channel: "email",
+      phase,
+      reminderId: String(reminder._id),
+    });
   }
 }
 
 async function sendReminderPush(reminder, user) {
+  let phase = "firebase_send";
   try {
     const result = await firebaseMessaging.sendEachForMulticast({
       tokens: user.pushTokens,
@@ -135,25 +148,68 @@ async function sendReminderPush(reminder, user) {
         : [];
     });
     if (invalidTokens.length) {
+      phase = "remove_invalid_tokens_from_database";
       await User.updateOne(
         { _id: user._id },
         { $pull: { pushTokens: { $in: invalidTokens } } },
       );
     }
     if (result.successCount > 0) {
+      phase = "mark_sent_in_database";
       await Reminder.updateOne(
         { _id: reminder._id, pushSentAt: null },
         { $set: { pushSentAt: new Date() } },
       );
     }
     if (result.failureCount > 0) {
-      console.error(
-        `Push delivery failed for ${result.failureCount} device(s) (${reminder._id}).`,
-      );
+      const failureCodes = result.responses.reduce((counts, response) => {
+        if (!response.error) return counts;
+        const code = response.error.code || "unknown";
+        counts[code] = (counts[code] || 0) + 1;
+        return counts;
+      }, {});
+      logError("reminder_delivery_failed", new Error("Firebase rejected one or more devices"), {
+        channel: "push",
+        phase: "provider_rejected",
+        reminderId: String(reminder._id),
+        successCount: result.successCount,
+        failureCount: result.failureCount,
+        failureCodes,
+      });
     }
   } catch (error) {
-    console.error(`Push delivery failed (${reminder._id}): ${error.message}`);
+    logError("reminder_delivery_failed", error, {
+      channel: "push",
+      phase,
+      reminderId: String(reminder._id),
+    });
   }
+}
+
+function logError(event, error, context = {}) {
+  let message = String(error?.message || error || "Unknown failure");
+  for (const secret of [PRIVATE_KEY, SMTP_PASS, DATABASE_URL]) {
+    if (secret) message = message.split(secret).join("[REDACTED]");
+  }
+  message = message
+    .replace(/-----BEGIN [^-]+-----[\s\S]*?-----END [^-]+-----/g, "[REDACTED KEY]")
+    .slice(0, 1000);
+
+  console.error(
+    JSON.stringify({
+      level: "error",
+      event,
+      ...context,
+      error: {
+        name: error?.name || "Error",
+        code: error?.code || null,
+        command: error?.command || null,
+        responseCode: error?.responseCode || null,
+        message,
+      },
+      at: new Date().toISOString(),
+    }),
+  );
 }
 
 function escapeHtml(value) {
