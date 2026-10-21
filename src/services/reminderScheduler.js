@@ -66,93 +66,93 @@ async function processDueReminders() {
         reminder.dueAt.getTime() - user.reminderAdvanceMinutes * 60 * 1000,
       );
       if (notifyAt > now) continue;
+      const deliveries = [];
       if (transporter && !reminder.emailSentAt) {
-        try {
-          const delivery = await transporter.sendMail({
-            from: MAIL_FROM,
-            to: user.email,
-            subject: `Reminder: ${reminder.title}`,
-            text: `Hi ${user.name},\n\nThis is your reminder${reminder.description ? `: ${reminder.description}` : "."}\nDue: ${reminder.dueAt.toLocaleString()}\n\n— Daymark`,
-            html: `<p>Hi ${escapeHtml(user.name)},</p><p>This is your reminder: <strong>${escapeHtml(reminder.title)}</strong></p>${reminder.description ? `<p>${escapeHtml(reminder.description)}</p>` : ""}<p>Due: ${escapeHtml(reminder.dueAt.toLocaleString())}</p><p>— Daymark</p>`,
-          });
-          const acceptedRecipients = (delivery.accepted || []).map(
-            (recipient) =>
-              typeof recipient === "string" ? recipient : recipient.address,
-          );
-          const wasAccepted = acceptedRecipients.some(
-            (recipient) =>
-              recipient?.toLowerCase() === user.email.toLowerCase(),
-          );
-
-          if (wasAccepted) {
-            await Reminder.updateOne(
-              { _id: reminder._id, emailSentAt: null },
-              { $set: { emailSentAt: new Date() } },
-            );
-          } else {
-            const rejected = (delivery.rejected || []).join(", ");
-            console.error(
-              `Reminder email was not accepted (${reminder._id})${rejected ? `: ${rejected}` : "."}`,
-            );
-          }
-        } catch (error) {
-          console.error(
-            `Reminder email failed (${reminder._id}): ${error.message}`,
-          );
-        }
+        deliveries.push(sendReminderEmail(reminder, user));
       }
-
-      if (
-        firebaseMessaging &&
-        !reminder.pushSentAt &&
-        user.pushTokens?.length
-      ) {
-        try {
-          const result = await firebaseMessaging.sendEachForMulticast({
-            tokens: user.pushTokens,
-            data: {
-              title: `Reminder: ${reminder.title}`,
-              body: reminder.description || "Your reminder is due soon.",
-              url: "/reminder",
-              reminderId: String(reminder._id),
-            },
-          });
-          const invalidTokens = result.responses.flatMap((response, index) => {
-            const code = response.error?.code;
-            return [
-              "messaging/invalid-registration-token",
-              "messaging/registration-token-not-registered",
-            ].includes(code)
-              ? [user.pushTokens[index]]
-              : [];
-          });
-          if (invalidTokens.length) {
-            await User.updateOne(
-              { _id: user._id },
-              { $pull: { pushTokens: { $in: invalidTokens } } },
-            );
-          }
-          if (result.successCount > 0) {
-            await Reminder.updateOne(
-              { _id: reminder._id, pushSentAt: null },
-              { $set: { pushSentAt: new Date() } },
-            );
-          }
-          if (result.failureCount > 0)
-            console.error(
-              `Push delivery failed for ${result.failureCount} device(s) (${reminder._id}).`,
-            );
-        } catch (error) {
-          console.error(
-            `Push delivery failed (${reminder._id}): ${error.message}`,
-          );
-        }
+      if (firebaseMessaging && !reminder.pushSentAt && user.pushTokens?.length) {
+        deliveries.push(sendReminderPush(reminder, user));
       }
+      await Promise.all(deliveries);
     }
   } catch (error) {
     console.error(`Reminder scheduler failed: ${error.message}`);
   } finally {
     running = false;
+  }
+}
+
+async function sendReminderEmail(reminder, user) {
+  try {
+    const delivery = await transporter.sendMail({
+      from: MAIL_FROM,
+      to: user.email,
+      subject: `Reminder: ${reminder.title}`,
+      text: `Hi ${user.name},\n\nThis is your reminder${reminder.description ? `: ${reminder.description}` : "."}\nDue: ${reminder.dueAt.toLocaleString()}\n\n— Daymark`,
+      html: `<p>Hi ${escapeHtml(user.name)},</p><p>This is your reminder: <strong>${escapeHtml(reminder.title)}</strong></p>${reminder.description ? `<p>${escapeHtml(reminder.description)}</p>` : ""}<p>Due: ${escapeHtml(reminder.dueAt.toLocaleString())}</p><p>— Daymark</p>`,
+    });
+    const acceptedRecipients = (delivery.accepted || []).map((recipient) =>
+      typeof recipient === "string" ? recipient : recipient.address,
+    );
+    const wasAccepted = acceptedRecipients.some(
+      (recipient) => recipient?.toLowerCase() === user.email.toLowerCase(),
+    );
+
+    if (wasAccepted) {
+      await Reminder.updateOne(
+        { _id: reminder._id, emailSentAt: null },
+        { $set: { emailSentAt: new Date() } },
+      );
+    } else {
+      const rejected = (delivery.rejected || []).join(", ");
+      console.error(
+        `Reminder email was not accepted (${reminder._id})${rejected ? `: ${rejected}` : "."}`,
+      );
+    }
+  } catch (error) {
+    console.error(`Reminder email failed (${reminder._id}): ${error.message}`);
+  }
+}
+
+async function sendReminderPush(reminder, user) {
+  try {
+    const result = await firebaseMessaging.sendEachForMulticast({
+      tokens: user.pushTokens,
+      data: {
+        title: `Reminder: ${reminder.title}`,
+        body: reminder.description || "Your reminder is due soon.",
+        url: "/reminder",
+        reminderId: String(reminder._id),
+      },
+    });
+    const invalidTokens = result.responses.flatMap((response, index) => {
+      const code = response.error?.code;
+      return [
+        "messaging/invalid-registration-token",
+        "messaging/registration-token-not-registered",
+      ].includes(code)
+        ? [user.pushTokens[index]]
+        : [];
+    });
+    if (invalidTokens.length) {
+      await User.updateOne(
+        { _id: user._id },
+        { $pull: { pushTokens: { $in: invalidTokens } } },
+      );
+    }
+    if (result.successCount > 0) {
+      await Reminder.updateOne(
+        { _id: reminder._id, pushSentAt: null },
+        { $set: { pushSentAt: new Date() } },
+      );
+    }
+    if (result.failureCount > 0) {
+      console.error(
+        `Push delivery failed for ${result.failureCount} device(s) (${reminder._id}).`,
+      );
+    }
+  } catch (error) {
+    console.error(`Push delivery failed (${reminder._id}): ${error.message}`);
   }
 }
 
