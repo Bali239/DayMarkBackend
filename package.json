@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "nodemon server.js",
     "start": "node server.js",
-    "seed:reminders": "node scripts/seed-reminders.js"
+    "seed:reminders": "node scripts/seed-reminders.js",
+    "auth:gmail": "node scripts/generate-gmail-refresh-token.js"
   },
   "keywords": [],
   "author": "",

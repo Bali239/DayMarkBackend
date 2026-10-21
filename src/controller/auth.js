@@ -48,8 +48,20 @@ export async function registerPushToken(req, res, next) {
     if (!parsed.success)
       return ErrorResponse(res, "A valid push token is required", 400);
     await savePushToken(req.user._id, parsed.data.token);
+    console.info(JSON.stringify({
+      level: "info",
+      event: "push_token_registered",
+      at: new Date().toISOString(),
+    }));
     return SuccessResponse(res, null, "Push notifications enabled");
   } catch (error) {
+    console.error(JSON.stringify({
+      level: "error",
+      event: "push_token_registration_failed",
+      errorName: error?.name || "Error",
+      errorCode: error?.code || null,
+      at: new Date().toISOString(),
+    }));
     return next(error);
   }
 }
@@ -60,8 +72,20 @@ export async function unregisterPushToken(req, res, next) {
     if (!parsed.success)
       return ErrorResponse(res, "A valid push token is required", 400);
     await removePushToken(req.user._id, parsed.data.token);
+    console.info(JSON.stringify({
+      level: "info",
+      event: "push_token_unregistered",
+      at: new Date().toISOString(),
+    }));
     return SuccessResponse(res, null, "Push notifications disabled");
   } catch (error) {
+    console.error(JSON.stringify({
+      level: "error",
+      event: "push_token_unregistration_failed",
+      errorName: error?.name || "Error",
+      errorCode: error?.code || null,
+      at: new Date().toISOString(),
+    }));
     return next(error);
   }
 }
