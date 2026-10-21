@@ -52,6 +52,7 @@ async function processDueReminders() {
       .sort({ dueAt: 1 })
       .limit(500)
       .lean();
+    let emailSentThisRun = false;
     for (const reminder of reminders) {
       const user = advanceByUser.get(String(reminder.user));
       if (!user) continue;
@@ -61,7 +62,10 @@ async function processDueReminders() {
       if (notifyAt > now) continue;
       const deliveries = [];
       if (mailConfigured && !reminder.emailSentAt) {
-        deliveries.push(sendReminderEmail(reminder, user));
+        if (!emailSentThisRun) {
+          await sendReminderEmail(reminder, user);
+          emailSentThisRun = true;
+        }
       }
       if (firebaseMessaging && !reminder.pushSentAt && user.pushTokens?.length) {
         deliveries.push(sendReminderPush(reminder, user));
@@ -80,11 +84,30 @@ async function processDueReminders() {
 async function sendReminderEmail(reminder, user) {
   let phase = "provider_send";
   try {
+    const dueAt = new Date(reminder.dueAt);
+    const dateText = dueAt.toLocaleDateString(undefined, {
+      weekday: "long",
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    });
+    const timeText = dueAt.toLocaleTimeString(undefined, {
+      hour: "numeric",
+      minute: "2-digit",
+      timeZoneName: "short",
+    });
+    const descriptionText = reminder.description?.trim() || "No additional details provided.";
+    const category = reminder.category || "Personal";
+    const safeName = escapeHtml(user.name || "there");
+    const safeTitle = escapeHtml(reminder.title);
+    const safeDescription = escapeHtml(descriptionText).replace(/\n/g, "<br>");
+    const safeCategory = escapeHtml(category);
+    const dueLabel = `${dateText} at ${timeText}`;
     const delivery = await sendGmailMessage({
       to: user.email,
       subject: `Reminder: ${reminder.title}`,
-      text: `Hi ${user.name},\n\nThis is your reminder${reminder.description ? `: ${reminder.description}` : "."}\nDue: ${reminder.dueAt.toLocaleString()}\n\n— Daymark`,
-      html: `<p>Hi ${escapeHtml(user.name)},</p><p>This is your reminder: <strong>${escapeHtml(reminder.title)}</strong></p>${reminder.description ? `<p>${escapeHtml(reminder.description)}</p>` : ""}<p>Due: ${escapeHtml(reminder.dueAt.toLocaleString())}</p><p>— Daymark</p>`,
+      text: `Hi ${user.name || "there"},\n\nYour reminder is coming up.\n\n${reminder.title}\n${descriptionText}\n\nDue ${dueLabel}\nCategory: ${category}\n\n— Daymark`,
+      html: `<!doctype html><html><body style="margin:0;padding:32px 12px;background:#f5f3ff;font-family:Arial,Helvetica,sans-serif;color:#1f2937"><table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr><td align="center"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:560px;background:#ffffff;border:1px solid #e9e5f5;border-radius:18px;overflow:hidden"><tr><td style="padding:24px 30px;background:#6d5ce8;color:#ffffff"><div style="font-size:13px;letter-spacing:2px;text-transform:uppercase;font-weight:bold">Daymark</div><div style="font-size:14px;margin-top:7px;opacity:.9">A gentle heads-up</div></td></tr><tr><td style="padding:30px"><p style="margin:0 0 18px;font-size:16px">Hi ${safeName},</p><p style="margin:0 0 8px;color:#6b7280;font-size:14px">You have a reminder coming up</p><h1 style="margin:0 0 18px;font-size:25px;line-height:1.3;color:#242033">${safeTitle}</h1><div style="display:inline-block;margin-bottom:22px;padding:7px 11px;border-radius:999px;background:#f3f0ff;color:#5b4bcc;font-size:12px;font-weight:bold">${safeCategory}</div><div style="padding:17px 18px;border:1px solid #eeeaf7;border-radius:12px;background:#faf9ff"><div style="margin-bottom:6px;color:#6b7280;font-size:12px;text-transform:uppercase;letter-spacing:1px">Due</div><div style="font-size:16px;font-weight:bold;color:#29243d">${escapeHtml(dueLabel)}</div></div><div style="margin-top:22px;color:#4b5563;font-size:14px;line-height:1.7">${safeDescription}</div></td></tr><tr><td style="padding:18px 30px;border-top:1px solid #eeeaf7;color:#8b8798;font-size:12px">Sent by Daymark · Stay on top of what matters.</td></tr></table></td></tr></table></body></html>`,
     });
     if (delivery.messageId) {
       phase = "mark_sent_in_database";
