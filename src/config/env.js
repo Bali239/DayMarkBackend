@@ -49,5 +49,5 @@ export const mailConfigured = Boolean(
   SMTP_HOST && SMTP_USER && SMTP_PASS && MAIL_FROM,
 );
 export const pushConfigured = Boolean(
-  FIREBASE_SERVICE_ACCOUNT_JSON || GOOGLE_APPLICATION_CREDENTIALS,
+  FIREBASE_SERVICE_ACCOUNT_JSON?.trim() || GOOGLE_APPLICATION_CREDENTIALS?.trim(),
 );
